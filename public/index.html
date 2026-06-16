@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>公募基金年化收益率查询</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-labelledby="page-title">
+        <div class="query-panel">
+          <div class="title-block">
+            <p>基金净值计算器</p>
+            <h1 id="page-title">公募基金年化收益率查询</h1>
+          </div>
+
+          <form id="calculator-form" class="form-grid">
+            <label class="field field-wide">
+              <span>基金名称或代码</span>
+              <input
+                id="fund-query"
+                name="fund-query"
+                type="search"
+                placeholder="例如：华夏成长 或 000001"
+                autocomplete="off"
+                required
+              />
+            </label>
+
+            <div id="suggestions" class="suggestions" aria-live="polite"></div>
+
+            <label class="field">
+              <span>买入日期</span>
+              <input id="buy-date" name="buy-date" type="date" required />
+            </label>
+
+            <label class="field">
+              <span>购买金额</span>
+              <input
+                id="purchase-amount"
+                name="purchase-amount"
+                type="number"
+                min="1"
+                step="0.01"
+                placeholder="例如：10000"
+                required
+              />
+            </label>
+
+            <fieldset class="field nav-toggle">
+              <legend>净值口径</legend>
+              <label>
+                <input type="radio" name="nav-type" value="accumulated" checked />
+                <span>累计净值</span>
+              </label>
+              <label>
+                <input type="radio" name="nav-type" value="unit" />
+                <span>单位净值</span>
+              </label>
+            </fieldset>
+
+            <button class="primary-action" type="submit">计算年化收益率</button>
+          </form>
+
+          <p class="data-note">
+            数据通过东方财富/天天基金公开脚本数据源获取。买入日若非净值披露日，按其后的第一条净值记录计算。
+          </p>
+        </div>
+
+        <section class="result-panel" aria-live="polite">
+          <div id="empty-state" class="empty-state">
+            <div class="mini-chart" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <h2>输入基金与买入日期后开始计算</h2>
+            <p>结果会展示费前/费后年化收益率、手续费估算、确认净值日期和近期净值曲线。</p>
+          </div>
+
+          <div id="loading-state" class="status-state hidden">正在查询净值并计算...</div>
+          <div id="error-state" class="status-state error hidden"></div>
+
+          <div id="result-state" class="results hidden">
+            <div class="selected-fund">
+              <p id="fund-meta">已选择基金</p>
+              <h2 id="fund-name">--</h2>
+            </div>
+
+            <div class="metric-grid">
+              <div class="metric highlight">
+                <span>费后年化收益率</span>
+                <strong id="after-fee-annualized-return">--</strong>
+              </div>
+              <div class="metric">
+                <span>费前年化收益率</span>
+                <strong id="annualized-return">--</strong>
+              </div>
+              <div class="metric">
+                <span>费后总收益</span>
+                <strong id="after-fee-total-return">--</strong>
+              </div>
+              <div class="metric">
+                <span>费前总收益</span>
+                <strong id="total-return">--</strong>
+              </div>
+              <div class="metric">
+                <span>持有天数</span>
+                <strong id="holding-days">--</strong>
+              </div>
+              <div class="metric">
+                <span>费后到账估算</span>
+                <strong id="after-fee-value">--</strong>
+              </div>
+            </div>
+
+            <dl class="fee-list">
+              <div>
+                <dt>买入手续费</dt>
+                <dd id="purchase-fee">--</dd>
+                <small id="purchase-fee-rule">--</small>
+              </div>
+              <div>
+                <dt>当日赎回费</dt>
+                <dd id="redemption-fee">--</dd>
+                <small id="redemption-fee-rule">--</small>
+              </div>
+              <div>
+                <dt>费率来源</dt>
+                <dd id="fee-source">--</dd>
+                <small>按天天基金费率页匹配金额档位和持有天数，结果为估算值。</small>
+              </div>
+            </dl>
+
+            <div class="chart-wrap">
+              <canvas id="nav-chart" width="920" height="300" aria-label="净值走势"></canvas>
+            </div>
+
+            <dl class="detail-list">
+              <div>
+                <dt>起始净值日期</dt>
+                <dd id="start-date">--</dd>
+              </div>
+              <div>
+                <dt>起始净值</dt>
+                <dd id="start-nav">--</dd>
+              </div>
+              <div>
+                <dt>最新净值日期</dt>
+                <dd id="end-date">--</dd>
+              </div>
+              <div>
+                <dt>最新净值</dt>
+                <dd id="end-nav">--</dd>
+              </div>
+            </dl>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
