@@ -1,6 +1,6 @@
 const queryInput = document.querySelector("#fund-query");
-const buyDateInput = document.querySelector("#buy-date");
-const purchaseAmountInput = document.querySelector("#purchase-amount");
+const purchaseLots = document.querySelector("#purchase-lots");
+const addLotButton = document.querySelector("#add-lot");
 const suggestions = document.querySelector("#suggestions");
 const form = document.querySelector("#calculator-form");
 const emptyState = document.querySelector("#empty-state");
@@ -8,12 +8,16 @@ const loadingState = document.querySelector("#loading-state");
 const errorState = document.querySelector("#error-state");
 const resultState = document.querySelector("#result-state");
 const chart = document.querySelector("#nav-chart");
+const lotResults = document.querySelector("#lot-results");
 let lastResult = null;
 let fundCatalogPromise = null;
 let providerScriptId = 0;
+let lotId = 0;
 
 const FUND_CATALOG_URL = "https://fund.eastmoney.com/js/fundcode_search.js";
 const NAV_URL = "https://fundf10.eastmoney.com/F10DataApi.aspx";
+const API_SEARCH_URL = "/api/funds/search";
+const API_ANNUALIZED_URL = "/api/funds/annualized";
 
 const selectedFund = {
   code: "",
@@ -22,7 +26,7 @@ const selectedFund = {
   company: "",
 };
 
-buyDateInput.max = new Date(Date.now() - 24 * 60 * 60 * 1000)
+const maxBuyDate = new Date(Date.now() - 24 * 60 * 60 * 1000)
   .toISOString()
   .slice(0, 10);
 
@@ -62,6 +66,19 @@ function setState(state, message = "") {
 
 function friendlyFetchError(error) {
   return error.message || "请求失败，请稍后再试。";
+}
+
+async function fetchJson(url, fallbackMessage) {
+  const response = await fetch(url);
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(fallbackMessage);
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || fallbackMessage);
+  }
+  return data;
 }
 
 function loadProviderGlobal(url, globalName) {
@@ -109,6 +126,17 @@ async function getFundCatalog() {
 
 async function searchFundCatalog(keyword) {
   const normalized = normalizeText(keyword);
+  const params = new URLSearchParams({ q: keyword });
+
+  try {
+    const data = await fetchJson(`${API_SEARCH_URL}?${params.toString()}`, "基金搜索接口暂时不可用。");
+    if (Array.isArray(data.funds)) {
+      return data.funds;
+    }
+  } catch (error) {
+    console.warn("Fund search API failed, falling back to provider script.", error);
+  }
+
   const catalog = await getFundCatalog();
   if (!Array.isArray(catalog)) {
     throw new Error("基金列表数据格式异常，请稍后重试。");
@@ -153,6 +181,61 @@ function parseDateDays(value) {
 function cleanNumber(value) {
   const number = Number(String(value || "").replace(/,/g, "").trim());
   return Number.isFinite(number) ? number : null;
+}
+
+function createLotRow(values = {}) {
+  lotId += 1;
+  const row = document.createElement("div");
+  row.className = "lot-row";
+  row.dataset.lotId = String(lotId);
+  row.innerHTML = `
+    <label class="field">
+      <span>买入日期</span>
+      <input class="lot-date" type="date" max="${maxBuyDate}" required />
+    </label>
+    <label class="field">
+      <span>购买金额</span>
+      <input
+        class="lot-amount"
+        type="number"
+        min="1"
+        step="0.01"
+        placeholder="例如：10000"
+        required
+      />
+    </label>
+    <button class="icon-action remove-lot" type="button" aria-label="删除这笔买入">删除</button>
+  `;
+
+  row.querySelector(".lot-date").value = values.buyDate || "";
+  row.querySelector(".lot-amount").value = values.amount || "";
+  row.querySelector(".remove-lot").addEventListener("click", () => {
+    if (purchaseLots.querySelectorAll(".lot-row").length <= 1) {
+      row.querySelector(".lot-date").value = "";
+      row.querySelector(".lot-amount").value = "";
+      return;
+    }
+    row.remove();
+    syncLotRemoveButtons();
+  });
+  purchaseLots.appendChild(row);
+  syncLotRemoveButtons();
+  return row;
+}
+
+function syncLotRemoveButtons() {
+  const rows = [...purchaseLots.querySelectorAll(".lot-row")];
+  rows.forEach((row) => {
+    row.querySelector(".remove-lot").disabled = rows.length <= 1;
+  });
+}
+
+function readPurchaseLots() {
+  return [...purchaseLots.querySelectorAll(".lot-row")].map((row, index) => ({
+    index: index + 1,
+    buyDate: row.querySelector(".lot-date").value,
+    amount: Number(row.querySelector(".lot-amount").value),
+  }));
 }
 
 function parseNavRows(html) {
@@ -204,7 +287,7 @@ async function fetchNavRows(code, startDate, endDate) {
   return rows.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-async function calculateAnnualized(code, buyDate, navType) {
+async function calculateAnnualizedDirect(code, buyDate, navType) {
   if (!/^\d{6}$/.test(code || "")) {
     throw new Error("基金代码应为 6 位数字。");
   }
@@ -248,11 +331,30 @@ async function calculateAnnualized(code, buyDate, navType) {
   };
 }
 
-async function fetchFeeRules(code, amount, holdingDays) {
+async function calculateAnnualized(code, buyDate, navType) {
+  const params = new URLSearchParams({
+    code,
+    buyDate,
+    navType,
+  });
+
+  try {
+    return await fetchJson(
+      `${API_ANNUALIZED_URL}?${params.toString()}`,
+      "净值计算接口暂时不可用。"
+    );
+  } catch (error) {
+    console.warn("Annualized API failed, falling back to provider script.", error);
+    return calculateAnnualizedDirect(code, buyDate, navType);
+  }
+}
+
+async function fetchFeeRules(code, amount, holdingDays, buyDate) {
   const params = new URLSearchParams({
     code,
     amount: String(amount),
     holdingDays: String(holdingDays),
+    buyDate,
   });
   const response = await fetch(`/api/funds/fees?${params.toString()}`);
   const contentType = response.headers.get("content-type") || "";
@@ -281,11 +383,92 @@ function calculateRedemptionFee(rule, amount) {
 function formatRule(rule) {
   if (!rule) return "未匹配到费率规则";
   const feeText = rule.type === "fixed" ? `每笔${formatMoney(rule.value)}` : `${(rule.value * 100).toFixed(2)}%`;
-  return `${rule.condition || "适用规则"} · ${feeText}`;
+  return `${rule.feeName ? `${rule.feeName} · ` : ""}${rule.condition || "适用规则"} · ${feeText}`;
 }
 
 function setReturnClass(element, value) {
   element.className = value >= 0 ? "positive" : "negative";
+}
+
+async function calculateLotResult(code, lot, navType) {
+  const data = await calculateAnnualized(code, lot.buyDate, navType);
+  let fees;
+  try {
+    fees = await fetchFeeRules(data.code, lot.amount, data.elapsedDays, data.requestedBuyDate);
+  } catch (error) {
+    throw new Error(`第 ${lot.index} 笔费率查询失败：${friendlyFetchError(error)}`);
+  }
+
+  const navRatio = data.endNav / data.startNav;
+  const preFeeEndValue = lot.amount * navRatio;
+  const purchaseFee = calculateFee(fees.purchaseRule, lot.amount);
+  const investedAmount = Math.max(0, lot.amount - purchaseFee);
+  const redemptionBase = investedAmount * navRatio;
+  const redemptionFee = calculateRedemptionFee(fees.redemptionRule, redemptionBase);
+  const afterFeeValue = Math.max(0, redemptionBase - redemptionFee);
+  const afterFeeTotalReturn = afterFeeValue / lot.amount - 1;
+  const afterFeeAnnualizedReturn =
+    Math.pow(afterFeeValue / lot.amount, 365 / data.elapsedDays) - 1;
+
+  return {
+    ...data,
+    lotIndex: lot.index,
+    amount: lot.amount,
+    preFeeEndValue,
+    purchaseFee,
+    redemptionFee,
+    afterFeeValue,
+    afterFeeTotalReturn,
+    afterFeeAnnualizedReturn,
+    purchaseRule: fees.purchaseRule,
+    redemptionRule: fees.redemptionRule,
+  };
+}
+
+function sumBy(items, getter) {
+  return items.reduce((total, item) => total + getter(item), 0);
+}
+
+function weightedAverage(items, getter, weightGetter) {
+  const totalWeight = sumBy(items, weightGetter);
+  if (totalWeight <= 0) return 0;
+  return sumBy(items, (item) => getter(item) * weightGetter(item)) / totalWeight;
+}
+
+function buildPortfolioResult(code, navType, lots) {
+  const totalAmount = sumBy(lots, (lot) => lot.amount);
+  const preFeeEndValue = sumBy(lots, (lot) => lot.preFeeEndValue);
+  const afterFeeValue = sumBy(lots, (lot) => lot.afterFeeValue);
+  const totalPurchaseFee = sumBy(lots, (lot) => lot.purchaseFee);
+  const totalRedemptionFee = sumBy(lots, (lot) => lot.redemptionFee);
+  const earliestLot = [...lots].sort((a, b) => a.startDate.localeCompare(b.startDate))[0];
+  const latestLot = [...lots].sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+
+  return {
+    code,
+    navType,
+    lots,
+    lotCount: lots.length,
+    totalAmount,
+    preFeeEndValue,
+    afterFeeValue,
+    totalPurchaseFee,
+    totalRedemptionFee,
+    totalReturn: preFeeEndValue / totalAmount - 1,
+    annualizedReturn: weightedAverage(lots, (lot) => lot.annualizedReturn, (lot) => lot.amount),
+    afterFeeTotalReturn: afterFeeValue / totalAmount - 1,
+    afterFeeAnnualizedReturn: weightedAverage(
+      lots,
+      (lot) => lot.afterFeeAnnualizedReturn,
+      (lot) => lot.amount
+    ),
+    weightedHoldingDays: weightedAverage(lots, (lot) => lot.elapsedDays, (lot) => lot.amount),
+    startDate: earliestLot.startDate,
+    startNav: earliestLot.startNav,
+    endDate: latestLot.endDate,
+    endNav: latestLot.endNav,
+    series: earliestLot.series,
+  };
 }
 
 function chooseFund(fund) {
@@ -337,100 +520,121 @@ const searchFunds = debounce(async () => {
 });
 
 queryInput.addEventListener("input", searchFunds);
+addLotButton.addEventListener("click", () => {
+  createLotRow();
+});
+createLotRow();
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const fallbackCode = queryInput.value.match(/\d{6}/)?.[0] || "";
   const code = selectedFund.code || fallbackCode;
-  const buyDate = buyDateInput.value;
   const navType = new FormData(form).get("nav-type");
-  const purchaseAmount = Number(purchaseAmountInput.value);
+  const lots = readPurchaseLots();
 
   if (!code) {
     setState("error", "请先从搜索结果中选择一只基金，或直接输入 6 位基金代码。");
     return;
   }
-  if (!Number.isFinite(purchaseAmount) || purchaseAmount <= 0) {
-    setState("error", "请输入大于 0 的购买金额。");
-    return;
+
+  for (const lot of lots) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lot.buyDate || "")) {
+      setState("error", `请填写第 ${lot.index} 笔买入日期。`);
+      return;
+    }
+    if (!Number.isFinite(lot.amount) || lot.amount <= 0) {
+      setState("error", `请填写第 ${lot.index} 笔大于 0 的购买金额。`);
+      return;
+    }
   }
 
   setState("loading");
   try {
-    renderResult(await calculateAnnualized(code, buyDate, navType), purchaseAmount);
+    const results = [];
+    for (const lot of lots) {
+      results.push(await calculateLotResult(code, lot, navType));
+    }
+    renderResult(buildPortfolioResult(code, navType, results));
   } catch (error) {
     setState("error", friendlyFetchError(error));
   }
 });
 
-async function renderResult(data, purchaseAmount) {
+function renderResult(data) {
   const displayName = selectedFund.name || `基金 ${data.code}`;
   document.querySelector("#fund-name").textContent = `${displayName}（${data.code}）`;
   document.querySelector("#fund-meta").textContent =
-    `${selectedFund.type || "公募基金"} · ${data.navType === "accumulated" ? "累计净值" : "单位净值"}口径`;
+    `${selectedFund.type || "公募基金"} · ${data.navType === "accumulated" ? "累计净值" : "单位净值"}口径 · ${data.lotCount} 笔买入`;
 
   const annualizedEl = document.querySelector("#annualized-return");
   const totalEl = document.querySelector("#total-return");
+  const afterFeeAnnualizedEl = document.querySelector("#after-fee-annualized-return");
+  const afterFeeTotalEl = document.querySelector("#after-fee-total-return");
   annualizedEl.textContent = formatPercent(data.annualizedReturn);
   totalEl.textContent = formatPercent(data.totalReturn);
+  afterFeeAnnualizedEl.textContent = formatPercent(data.afterFeeAnnualizedReturn);
+  afterFeeTotalEl.textContent = formatPercent(data.afterFeeTotalReturn);
   setReturnClass(annualizedEl, data.annualizedReturn);
   setReturnClass(totalEl, data.totalReturn);
+  setReturnClass(afterFeeAnnualizedEl, data.afterFeeAnnualizedReturn);
+  setReturnClass(afterFeeTotalEl, data.afterFeeTotalReturn);
 
-  document.querySelector("#holding-days").textContent = `${data.elapsedDays} 天`;
+  document.querySelector("#holding-days").textContent = `${Math.round(data.weightedHoldingDays)} 天`;
+  document.querySelector("#after-fee-value").textContent = formatMoney(data.afterFeeValue);
   document.querySelector("#start-date").textContent = data.startDate;
   document.querySelector("#start-nav").textContent = formatNav(data.startNav);
   document.querySelector("#end-date").textContent = data.endDate;
   document.querySelector("#end-nav").textContent = formatNav(data.endNav);
 
-  await renderFeeResult(data, purchaseAmount);
+  document.querySelector("#purchase-fee").textContent = formatMoney(data.totalPurchaseFee);
+  document.querySelector("#redemption-fee").textContent = formatMoney(data.totalRedemptionFee);
+  document.querySelector("#purchase-fee-rule").textContent =
+    `共 ${data.lotCount} 笔，按各笔买入日期匹配认购/申购费率。`;
+  document.querySelector("#redemption-fee-rule").textContent =
+    `按各笔持有天数匹配赎回费率。`;
+  document.querySelector("#fee-source").textContent = "天天基金费率页";
+
+  renderLotResults(data.lots);
   drawChart(data.series, data.navType);
   lastResult = data;
   setState("result");
 }
 
-async function renderFeeResult(data, purchaseAmount) {
-  const afterFeeAnnualizedEl = document.querySelector("#after-fee-annualized-return");
-  const afterFeeTotalEl = document.querySelector("#after-fee-total-return");
-  const afterFeeValueEl = document.querySelector("#after-fee-value");
-  const purchaseFeeEl = document.querySelector("#purchase-fee");
-  const redemptionFeeEl = document.querySelector("#redemption-fee");
-  const purchaseRuleEl = document.querySelector("#purchase-fee-rule");
-  const redemptionRuleEl = document.querySelector("#redemption-fee-rule");
-  const feeSourceEl = document.querySelector("#fee-source");
-
-  try {
-    const fees = await fetchFeeRules(data.code, purchaseAmount, data.elapsedDays);
-    const purchaseFee = calculateFee(fees.purchaseRule, purchaseAmount);
-    const investedAmount = Math.max(0, purchaseAmount - purchaseFee);
-    const grossEndValue = investedAmount * (data.endNav / data.startNav);
-    const redemptionFee = calculateRedemptionFee(fees.redemptionRule, grossEndValue);
-    const afterFeeValue = Math.max(0, grossEndValue - redemptionFee);
-    const afterFeeTotalReturn = afterFeeValue / purchaseAmount - 1;
-    const afterFeeAnnualizedReturn =
-      Math.pow(afterFeeValue / purchaseAmount, 365 / data.elapsedDays) - 1;
-
-    afterFeeAnnualizedEl.textContent = formatPercent(afterFeeAnnualizedReturn);
-    afterFeeTotalEl.textContent = formatPercent(afterFeeTotalReturn);
-    afterFeeValueEl.textContent = formatMoney(afterFeeValue);
-    purchaseFeeEl.textContent = formatMoney(purchaseFee);
-    redemptionFeeEl.textContent = formatMoney(redemptionFee);
-    purchaseRuleEl.textContent = formatRule(fees.purchaseRule);
-    redemptionRuleEl.textContent = formatRule(fees.redemptionRule);
-    feeSourceEl.textContent = "天天基金费率页";
-    setReturnClass(afterFeeAnnualizedEl, afterFeeAnnualizedReturn);
-    setReturnClass(afterFeeTotalEl, afterFeeTotalReturn);
-  } catch (error) {
-    afterFeeAnnualizedEl.textContent = "--";
-    afterFeeTotalEl.textContent = "--";
-    afterFeeValueEl.textContent = "--";
-    purchaseFeeEl.textContent = "--";
-    redemptionFeeEl.textContent = "--";
-    purchaseRuleEl.textContent = friendlyFetchError(error);
-    redemptionRuleEl.textContent = "费率接口不可用时无法估算当日赎回费。";
-    feeSourceEl.textContent = "未获取到";
-    afterFeeAnnualizedEl.className = "";
-    afterFeeTotalEl.className = "";
-  }
+function renderLotResults(lots) {
+  lotResults.innerHTML = lots
+    .map(
+      (lot) => `
+        <div class="lot-result">
+          <div>
+            <span>第 ${lot.lotIndex} 笔</span>
+            <strong>${lot.requestedBuyDate}</strong>
+          </div>
+          <div>
+            <span>金额</span>
+            <strong>${formatMoney(lot.amount)}</strong>
+          </div>
+          <div>
+            <span>确认净值日</span>
+            <strong>${lot.startDate}</strong>
+          </div>
+          <div>
+            <span>费后年化</span>
+            <strong class="${lot.afterFeeAnnualizedReturn >= 0 ? "positive" : "negative"}">${formatPercent(lot.afterFeeAnnualizedReturn)}</strong>
+          </div>
+          <div>
+            <span>买入费</span>
+            <strong>${formatMoney(lot.purchaseFee)}</strong>
+            <small>${formatRule(lot.purchaseRule)}</small>
+          </div>
+          <div>
+            <span>赎回费</span>
+            <strong>${formatMoney(lot.redemptionFee)}</strong>
+            <small>${formatRule(lot.redemptionRule)}</small>
+          </div>
+        </div>
+      `
+    )
+    .join("");
 }
 
 function drawChart(series, navType) {
@@ -448,8 +652,8 @@ function drawChart(series, navType) {
     navType === "accumulated" ? item.accumulatedNav : item.unitNav
   );
   const isGain = values[values.length - 1] >= values[0];
-  const chartColor = isGain ? "#c43d3d" : "#0f7b63";
-  const chartFill = isGain ? "196, 61, 61" : "15, 123, 99";
+  const chartColor = isGain ? "#c43d3d" : "#008c74";
+  const chartFill = isGain ? "196, 61, 61" : "0, 140, 116";
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
