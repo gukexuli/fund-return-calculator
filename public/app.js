@@ -17,7 +17,7 @@ let lotId = 0;
 const FUND_CATALOG_URL = "https://fund.eastmoney.com/js/fundcode_search.js";
 const NAV_URL = "https://fundf10.eastmoney.com/F10DataApi.aspx";
 const API_SEARCH_URL = "/api/funds/search";
-const API_ANNUALIZED_URL = "/api/funds/annualized";
+const API_ANNUALIZED_URL = "/api/funds/returns";
 
 const selectedFund = {
   code: "",
